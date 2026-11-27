@@ -2,6 +2,7 @@
 #include "SynTHBloK.hpp"
 #include "SynTHBloKMix24.hpp"
 #include "OledUi.hpp"
+#include "PolyStack.hpp"
 
 // ============================================================================
 // SynTHBloKPoly — Hybrid Polyphonic Engine (Rack 2.6, C++11 compliant)
@@ -143,6 +144,7 @@ struct SynTHBloKPoly : Module {
     float voiceCardBias[MAX_VOICES] = {};
 
     float phaseOffset[MAX_VOICES]   = {};
+    PolyStackOsc stackOsc[MAX_VOICES];
     float shapeBias[MAX_VOICES]     = {};
     float satBias[MAX_VOICES]       = {};
     float filtBias[MAX_VOICES]      = {};
@@ -237,6 +239,7 @@ struct SynTHBloKPoly : Module {
             voiceCardBias[v] = (random::uniform() - 0.5f) * 0.001f;
 
             phaseOffset[v]  = random::uniform() * 0.25f;
+            stackOsc[v].seed((uint32_t)(random::uniform() * 4294967040.f) + v);
             shapeBias[v]    = 0.9f  + (random::uniform() - 0.5f) * 0.10f;
             satBias[v]      = 1.6f  + (random::uniform() - 0.5f) * 0.20f;
             filtBias[v]     = 1.0f  + (random::uniform() - 0.5f) * 0.08f;
@@ -554,25 +557,11 @@ struct SynTHBloKPoly : Module {
             basePhase -= std::floor(basePhase);
 
             // ----------------------------------------------------
-            // HARMONIC STACK ENGINE
+            // HARMONIC STACK ENGINE (PolyStack.hpp: one band-limited, drifting saw per interval, on its own phase)
             // ----------------------------------------------------
-            float oscSum = 0.f;
-            for (int i = 0; i < stackCount; ++i) {
-                int semi = stackIntervals[preset][i];
-                float ratio = std::exp2(semi / 12.f);
-
-                float ph = basePhase * ratio;
-                ph -= std::floor(ph);
-
-                float o = ph * 2.f - 1.f;
-                o *= shapeBias[v];
-
-                float s = tanhf(o * satBias[v]);
-                o = 0.72f * o + 0.28f * s;
-
-                oscSum += o;
-            }
-            float osc = oscSum / std::max(1, stackCount);
+            float osc, sineBody, fifthRaw;
+            stackOsc[v].process(basePhase, freq * dt, stackIntervals[preset], stackCount, shapeBias[v], satBias[v],
+                                sampleRate, osc, sineBody, fifthRaw);
 
             // ----------------------------------------------------
             // FILTER INPUT MIX
@@ -599,9 +588,8 @@ struct SynTHBloKPoly : Module {
             // PAD ENGINE
             // ----------------------------------------------------
             float sineCore = sinf(basePhase * 2.f * M_PI);
-            float sineBody = sinf((basePhase * 0.5f) * 2.f * M_PI);
             float tri      = 4.f * fabsf(basePhase - 0.5f) - 1.f;
-            float fifth    = sinf((basePhase * 1.5f) * 2.f * M_PI) * shimmerBias[v];
+            float fifth    = fifthRaw * shimmerBias[v];
 
             float padMix =
                 voiceOut * 0.55f +
